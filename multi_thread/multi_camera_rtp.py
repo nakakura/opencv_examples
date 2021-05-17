@@ -12,6 +12,14 @@ IMAGE_HEIGHT = 720
 # H264 encode from the source
 VCAPS="video/x-raw,width=2560,height=720,framerate=60/1"
 
+# rtp送信用のパラメータ
+DEST = "127.0.0.1"
+
+DEST_VIDEO_RTP_PORT=20000
+DEST_VIDEO_RTCP_PORT=20001
+
+SRC_VIDEO_RTCP_PORT=20002
+
 def undistort_and_crop(frame, mapx, mapy):
     dst = cv2.remap(frame, mapx, mapy, cv2.INTER_LINEAR)
     dst = dst.get()[180:900, 320:1600]  # トリミング
@@ -97,7 +105,13 @@ if __name__ == "__main__":
     tm = cv2.TickMeter()
     tm.start()
 
-    gst_pipeline = "appsrc ! videoconvert ! {} ! autovideosink sync=false".format(VCAPS)
+    gst_pipeline = "rtpbin name=rtpbin rtp-profile=avpf " \
+                   "appsrc ! videoconvert ! {} ! videoconvert " \
+                   "! nvh264enc qos=true preset=5 ! rtph264pay pt=100 mtu=1400 " \
+                   "! rtprtxqueue max-size-packets=0 max-size-time=200 ! rtpbin.send_rtp_sink_0 " \
+                   "rtpbin.send_rtp_src_0 ! udpsink port={} host={} sync=false async=false name=vrtpsink " \
+                   "rtpbin.send_rtcp_src_0 ! udpsink port={} host={} sync=false async=false name=vrtcpsink " \
+                   "udpsrc port={} name=vrtpsrc ! rtpbin.recv_rtcp_sink_0".format(VCAPS, DEST_VIDEO_RTP_PORT, "127.0.0.1", DEST_VIDEO_RTCP_PORT, "127.0.0.1", SRC_VIDEO_RTCP_PORT)
     video_out = cv2.VideoWriter(
         gst_pipeline,
         cv2.CAP_GSTREAMER, 0, 60, (IMAGE_WIDTH, IMAGE_HEIGHT), True)
