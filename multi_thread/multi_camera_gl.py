@@ -4,95 +4,125 @@ import multiprocessing.sharedctypes
 import time
 import numpy
 
-WIDTH=1920
-HEIGHT=1080
+CAMERA_WIDTH = 1920
+CAMERA_HEIGHT = 1080
+IMAGE_WIDTH = 2560
+IMAGE_HEIGHT = 720
+
+
+def undistort_and_crop(frame, mapx, mapy):
+    dst = cv2.remap(frame, mapx, mapy, cv2.INTER_LINEAR)
+    dst = dst.get()[180:900, 320:1600]  # トリミング
+    return dst
+
+def open_camera(num):
+    try:
+        camera = cv2.VideoCapture(num, cv2.CAP_V4L2)
+    except TypeError:
+        camera = cv2.VideoCapture(num)
+
+    while not camera.isOpened():
+        print("not is opened")
+        continue
+
+    return camera
 
 def camera_reader(out_buf, buf1_ready):
-  try:
-    left_camera_capture = cv2.VideoCapture(0, cv2.CAP_V4L2)
-    right_camera_capture = cv2.VideoCapture(2, cv2.CAP_V4L2)
-  except TypeError:
-    left_camera_capture = cv2.VideoCapture(0)
-    right_camera_capture = cv2.VideoCapture(2)
+    # 歪み補正の値をセットアップ
+    # http://opencv.jp/opencv-2svn/py/camera_calibration_and_3d_reconstruction.html
+    # simulator
+    # https://kamino410.github.io/cv-snippets/camera_distortion_simulator/
+    mtx = [[1.69699655e+03, 0.00000000e+00, 9.56941641e+02],
+           [0.00000000e+00, 1.85621271e+03, 5.61461687e+02],
+           [0.00000000e+00, 0.00000000e+00, 1.00000000e+00]]
+    # k1, k2, p1, p2, k3
+    dist = [[-0.4847862, -0.44138978, -0.01640419, 0.00071213, -0.36719414]]
+    mtx = cv2.UMat(numpy.array(mtx, dtype=numpy.float32))
+    dist = cv2.UMat(numpy.array(dist, dtype=numpy.float32))
 
-  if left_camera_capture.isOpened() is False:
-    raise IOError
-  if right_camera_capture.isOpened() is False:
-    raise IOError
+    newcameramtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (CAMERA_WIDTH, CAMERA_HEIGHT), 1,
+                                                      (CAMERA_WIDTH, CAMERA_HEIGHT))
+    mapx, mapy = cv2.initUndistortRectifyMap(mtx, dist, None, newcameramtx, (CAMERA_WIDTH, CAMERA_HEIGHT), 5)
 
-  left_camera_capture.set(cv2.CAP_PROP_BUFFERSIZE, 4)
-  left_camera_capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
-  left_camera_capture.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
-  left_camera_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
-  left_camera_capture.set(cv2.CAP_PROP_FPS, 60)
+    left_camera_capture = open_camera(2)
+    right_camera_capture = open_camera(0)
 
-  right_camera_capture.set(cv2.CAP_PROP_BUFFERSIZE, 4)
-  right_camera_capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
-  right_camera_capture.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
-  right_camera_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
-  right_camera_capture.set(cv2.CAP_PROP_FPS, 60)
+    left_camera_capture.set(cv2.CAP_PROP_BUFFERSIZE, 4)
+    left_camera_capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+    left_camera_capture.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+    left_camera_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+    left_camera_capture.set(cv2.CAP_PROP_FPS, 60)
 
-  while(True):
-    try:
-      capture_start_time = time.time()
-      ret_l, frame_l = left_camera_capture.read()
-      ret_r, frame_r = right_camera_capture.read()
-      if ret_l is False:
-        raise IOError
-      buf1_ready.clear()
+    right_camera_capture.set(cv2.CAP_PROP_BUFFERSIZE, 4)
+    right_camera_capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+    right_camera_capture.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+    right_camera_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+    right_camera_capture.set(cv2.CAP_PROP_FPS, 60)
 
-      frame = cv2.hconcat([cv2.rotate(frame_l, cv2.ROTATE_180), cv2.rotate(frame_r, cv2.ROTATE_180)])
-      memoryview(out_buf).cast('B')[:] = memoryview(frame).cast('B')[:]
-      buf1_ready.set()
-    except KeyboardInterrupt:
-      # 終わるときは CTRL + C を押す
-      break
-  left_camera_capture.release()
+    while (True):
+        try:
+            capture_start_time = time.time()
+            ret_l, frame_l = left_camera_capture.read()
+            ret_r, frame_r = right_camera_capture.read()
+            if ret_l is False or ret_r is False:
+                continue
+            buf1_ready.clear()
+
+            frame_l = undistort_and_crop(frame_l, mapx, mapy)
+            frame_r = undistort_and_crop(frame_r, mapx, mapy)
+            frame = cv2.hconcat([cv2.rotate(frame_l, cv2.ROTATE_180), cv2.rotate(frame_r, cv2.ROTATE_180)])
+            memoryview(out_buf).cast('B')[:] = memoryview(frame).cast('B')[:]
+            buf1_ready.set()
+        except KeyboardInterrupt:
+            # 終わるときは CTRL + C を押す
+            break
+        except Exception:
+            continue
+
+    left_camera_capture.release()
+    right_camera_capture.release()
+
 
 if __name__ == "__main__":
-  buf1 = multiprocessing.sharedctypes.RawArray('B', HEIGHT*WIDTH*2*3)
-  buf1_ready = multiprocessing.Event()
-  buf1_ready.clear()
-  p1=multiprocessing.Process(target=camera_reader, args=(buf1,buf1_ready), daemon=True)
-  p1.start()
+    buf1 = multiprocessing.sharedctypes.RawArray('B', IMAGE_HEIGHT * IMAGE_WIDTH * 3)
+    buf1_ready = multiprocessing.Event()
+    buf1_ready.clear()
+    p1 = multiprocessing.Process(target=camera_reader, args=(buf1, buf1_ready), daemon=True)
+    p1.start()
 
-  captured_bgr_image = numpy.empty((HEIGHT, WIDTH*2, 3), dtype=numpy.uint8)
+    captured_bgr_image = numpy.empty((IMAGE_HEIGHT, IMAGE_WIDTH, 3), dtype=numpy.uint8)
 
-  tm = cv2.TickMeter()
-  tm.start()
+    tm = cv2.TickMeter()
+    tm.start()
 
-  video_out = cv2.VideoWriter(
-    "appsrc ! videoconvert ! video/x-raw,format=I420  ! autovideosink sync=false",
-    cv2.CAP_GSTREAMER, 0, 60, (WIDTH*2, HEIGHT), True)
+    video_out = cv2.VideoWriter(
+        "appsrc ! videoconvert ! video/x-raw,format=I420  ! autovideosink sync=false",
+        cv2.CAP_GSTREAMER, 0, 60, (IMAGE_WIDTH, IMAGE_HEIGHT), True)
 
-  count = 0
-  max_count = 10
-  fps = 0
+    count = 0
+    max_count = 10
+    fps = 0
 
+    while True:
+        try:
+            display_start_time = time.time()
+            buf1_ready.wait()
+            captured_bgr_image[:, :, :] = numpy.reshape(buf1, (IMAGE_HEIGHT, IMAGE_WIDTH, 3))
+            buf1_ready.clear()
+            video_out.write(captured_bgr_image)
 
-  while True:
-    try:
-      display_start_time = time.time()
-      buf1_ready.wait()
-      captured_bgr_image[:,:,:] = numpy.reshape(buf1, (HEIGHT, WIDTH*2, 3))
-      buf1_ready.clear()
-      video_out.write(captured_bgr_image)
+            # calc fps
+            if count == max_count:
+                tm.stop()
+                fps = max_count / tm.getTimeSec()
+                tm.reset()
+                tm.start()
+                count = 0
+            count += 1
+        except KeyboardInterrupt:
+            # 終わるときは CTRL + C を押す
+            print("Waiting camera reader to finish.")
+            p1.join(10)
+            break
 
-      #calc fps
-      if count == max_count:
-        tm.stop()
-        fps = max_count / tm.getTimeSec()
-        tm.reset()
-        tm.start()
-        count = 0
-        print(fps)
-      count += 1
-
-      cv2.waitKey(1)
-    except KeyboardInterrupt:
-      # 終わるときは CTRL + C を押す
-      print("Waiting camera reader to finish.")
-      p1.join(10)
-      break
-
-  cv2.destroyAllWindows()
+    cv2.destroyAllWindows()

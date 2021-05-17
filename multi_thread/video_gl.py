@@ -18,7 +18,6 @@ def camera_reader(out_buf, buf1_ready):
 
   capture.set(cv2.CAP_PROP_BUFFERSIZE, 4)
   capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
-  #capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('Y', 'U', 'Y', 'V'))
   capture.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
   capture.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
   capture.set(cv2.CAP_PROP_FPS, 60)
@@ -29,9 +28,6 @@ def camera_reader(out_buf, buf1_ready):
       ret, frame = capture.read()
       if ret is False:
         raise IOError
-      #print("Capture FPS = ", 1.0 / (time.time() - capture_start_time))
-      #bgr_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2YUV)
-      #cv2.imshow('frame2', bgr_frame)
       buf1_ready.clear()
       memoryview(out_buf).cast('B')[:] = memoryview(frame).cast('B')[:]
       buf1_ready.set()
